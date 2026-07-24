@@ -32,6 +32,7 @@ IANA_BOOTSTRAP = "https://data.iana.org/rdap/dns.json"
 FALLBACK_RDAP = {
     "com": "https://rdap.verisign.com/com/v1/domain/",
     "net": "https://rdap.verisign.com/net/v1/domain/",
+    "ca": "https://rdap.ca.fury.ca/rdap/domain/",
 }
 
 WHOIS_AVAILABLE_PATTERNS = (

@@ -21,6 +21,7 @@ Requires Python 3.8+. No third-party packages.
 ```
 python check_domains.py names.txt results.jsonl              # defaults to --tlds=com,ai
 python check_domains.py names.txt results.jsonl --tlds=com,ai,dev,io
+python check_domains.py names.txt results.jsonl --tlds=ca    # ccTLDs work too (.ca via CIRA)
 ```
 
 - `names.txt` — one bare candidate per line (no TLD). `#` comments allowed.

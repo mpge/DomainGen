@@ -51,6 +51,11 @@ WHOIS_AVAILABLE_PATTERNS = (
     "available for registration",
     "status: free",
 )
+# TLDs whose RDAP serves 404 for registry-restricted names, making WHOIS
+# cross-verification of "available" results necessary. gTLD RDAP (Verisign,
+# Identity Digital, Google Registry, ...) does not need this.
+WHOIS_VERIFY_TLDS = {"ca"}
+
 # Registry-reserved/blocked names. Some registries (e.g. CIRA/.ca) serve RDAP 404
 # for these even though they cannot be registered — WHOIS is the only tell.
 WHOIS_RESTRICTED_PATTERNS = (
@@ -174,10 +179,10 @@ def rdap_check(base, domain):
 def check(name, tld, rdap_map, whois_verify=True):
     """Return (status, source) for name.tld — RDAP first, WHOIS fallback.
 
-    An RDAP 404 is necessary but NOT sufficient proof of registrability: some
-    registries (CIRA/.ca among them) serve 404 for registry-restricted names.
-    So RDAP "available" is cross-verified against WHOIS by default; only a
-    WHOIS "not found" upgrades it to a confirmed "available".
+    For TLDs in WHOIS_VERIFY_TLDS an RDAP 404 is necessary but NOT sufficient
+    proof of registrability (CIRA/.ca serves 404 for registry-restricted names),
+    so RDAP "available" is cross-verified against WHOIS there; only a WHOIS
+    "not found" upgrades it to a confirmed "available". Other TLDs trust RDAP.
     """
     domain = f"{name}.{tld}"
     base = rdap_map.get(tld)
@@ -186,6 +191,8 @@ def check(name, tld, rdap_map, whois_verify=True):
         if status == "registered":
             return status, base
         if status == "available":
+            if tld not in WHOIS_VERIFY_TLDS:
+                return "available", base
             if not whois_verify:
                 return "available(rdap-only)", base
             w_status, w_server = whois_check(domain, tld)

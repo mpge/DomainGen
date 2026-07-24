@@ -4,6 +4,8 @@ A small, dependency-free Python script for **bulk domain availability checking**
 
 Built for brand-naming sprints: feed it a list of candidate names, get back a JSON Lines ledger of verified availability you can filter, score, and iterate on.
 
+[Want to find a domain without running this?](https://namerobo.com)
+
 ## Why RDAP?
 
 RDAP is the registries' own machine-readable successor to WHOIS. Querying it means:

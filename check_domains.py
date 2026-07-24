@@ -1,19 +1,21 @@
-"""Domain availability checker for .com and .ai via RDAP (authoritative) with WHOIS fallback.
+"""Bulk domain availability checker via RDAP (authoritative) with WHOIS fallback.
 
 Usage:
-    python check_domains.py names.txt results.jsonl
+    python check_domains.py names.txt results.jsonl [--tlds=com,ai]
 
-names.txt: one candidate name per line (bare name, no TLD).
-results.jsonl: append-mode JSON Lines, one record per (name, tld) check.
+names.txt: one candidate name per line (bare name, no TLD). '#' comments allowed.
+results.jsonl: append-mode JSON Lines, one record per candidate with per-TLD status.
 
-Semantics:
-  - .com  : Verisign RDAP  https://rdap.verisign.com/com/v1/domain/<name>.com
-            HTTP 404 -> available, HTTP 200 -> registered, else unverified (retried once)
-  - .ai   : RDAP endpoint discovered from IANA bootstrap (data.iana.org/rdap/dns.json),
-            404 -> available, 200 -> registered.
-            Fallback: WHOIS TCP/43 to whois.nic.ai; "NOT FOUND"/"No Object Found" -> available,
-            a populated record -> registered, anything else -> unverified.
-Never guesses: any ambiguous response is recorded as "unverified".
+How it works:
+  - Every TLD's RDAP endpoint is resolved at runtime from the IANA RDAP bootstrap
+    file (https://data.iana.org/rdap/dns.json), so any TLD with a published RDAP
+    service works out of the box: com, net, org, ai, dev, app, io, xyz, sh, gg, ...
+  - RDAP semantics: HTTP 404 -> available, HTTP 200 -> registered. 429s are retried
+    once after a backoff.
+  - If a TLD has no RDAP service (or RDAP is unreachable), the script falls back to
+    WHOIS: it asks whois.iana.org for the TLD's WHOIS server, then queries it on
+    TCP/43 and matches conservative "not found" / "domain name:" patterns.
+Anything ambiguous is recorded as "unverified" — the script never guesses.
 """
 import json
 import socket
@@ -23,9 +25,34 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
-UA = {"User-Agent": "domain-availability-research/1.0"}
+UA = {"User-Agent": "domaingen-availability-checker/2.0 (+https://github.com/mpge/DomainGen)"}
 IANA_BOOTSTRAP = "https://data.iana.org/rdap/dns.json"
-COM_RDAP = "https://rdap.verisign.com/com/v1/domain/"
+
+# Used only if the IANA bootstrap itself cannot be fetched.
+FALLBACK_RDAP = {
+    "com": "https://rdap.verisign.com/com/v1/domain/",
+    "net": "https://rdap.verisign.com/net/v1/domain/",
+}
+
+WHOIS_AVAILABLE_PATTERNS = (
+    "no object found",
+    "not found",
+    "no match",
+    "no entries found",
+    "no data found",
+    "domain not found",
+    "is free",
+    "available for registration",
+    "status: free",
+)
+WHOIS_REGISTERED_PATTERNS = (
+    "domain name:",
+    "domain:",
+    "registrar:",
+    "creation date",
+    "created:",
+    "registered on",
+)
 
 
 def http_status(url, timeout=15):
@@ -39,53 +66,81 @@ def http_status(url, timeout=15):
         return f"ERR:{type(e).__name__}"
 
 
-def discover_ai_rdap():
+def load_rdap_map():
+    """Return {tld: rdap_domain_query_base} from the IANA bootstrap file."""
     try:
         req = urllib.request.Request(IANA_BOOTSTRAP, headers=UA)
         with urllib.request.urlopen(req, timeout=20) as r:
             data = json.load(r)
+        mapping = {}
         for tlds, urls in data["services"]:
-            if "ai" in tlds:
-                base = urls[0]
-                if not base.endswith("/"):
-                    base += "/"
-                return base + "domain/"
+            base = urls[0]
+            if not base.endswith("/"):
+                base += "/"
+            for tld in tlds:
+                mapping[tld.lower()] = base + "domain/"
+        return mapping
+    except Exception:
+        return dict(FALLBACK_RDAP)
+
+
+def whois_query(server, query, timeout=15):
+    with socket.create_connection((server, 43), timeout=timeout) as s:
+        s.sendall((query + "\r\n").encode())
+        chunks = []
+        while True:
+            b = s.recv(4096)
+            if not b:
+                break
+            chunks.append(b)
+    return b"".join(chunks).decode(errors="replace")
+
+
+_whois_server_cache = {}
+
+
+def whois_server_for_tld(tld):
+    """Discover a TLD's WHOIS server from whois.iana.org (cached)."""
+    if tld in _whois_server_cache:
+        return _whois_server_cache[tld]
+    server = None
+    try:
+        text = whois_query("whois.iana.org", tld)
+        for line in text.splitlines():
+            if line.lower().startswith("whois:"):
+                server = line.split(":", 1)[1].strip()
+                break
     except Exception:
         pass
-    return None
+    _whois_server_cache[tld] = server
+    return server
 
 
-def whois_ai(domain, timeout=15):
-    """Return 'available' | 'registered' | 'unverified' via whois.nic.ai:43."""
+def whois_check(domain, tld):
+    """Return (status, source) via the TLD's WHOIS server."""
+    server = whois_server_for_tld(tld)
+    if not server:
+        return "unverified(no-whois-server)", "whois.iana.org"
     try:
-        with socket.create_connection(("whois.nic.ai", 43), timeout=timeout) as s:
-            s.sendall((domain + "\r\n").encode())
-            chunks = []
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        text = b"".join(chunks).decode(errors="replace")
-        low = text.lower()
-        if "no object found" in low or "not found" in low or "no match" in low:
-            return "available", "whois.nic.ai"
-        if "domain name:" in low or "registrar:" in low or "creation date" in low:
-            return "registered", "whois.nic.ai"
-        return "unverified", "whois.nic.ai"
+        text = whois_query(server, domain).lower()
+        if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):
+            return "available", server
+        if any(p in text for p in WHOIS_REGISTERED_PATTERNS):
+            return "registered", server
+        return "unverified", server
     except Exception:
-        return "unverified", "whois.nic.ai(error)"
+        return "unverified", f"{server}(error)"
 
 
-def check_rdap(url):
-    st = http_status(url)
+def rdap_check(base, domain):
+    st = http_status(base + domain)
     if st == 404:
         return "available"
     if st == 200:
         return "registered"
     if st == 429:
         time.sleep(5)
-        st = http_status(url)
+        st = http_status(base + domain)
         if st == 404:
             return "available"
         if st == 200:
@@ -93,8 +148,29 @@ def check_rdap(url):
     return f"unverified({st})"
 
 
+def check(name, tld, rdap_map):
+    """Return (status, source) for name.tld — RDAP first, WHOIS fallback."""
+    domain = f"{name}.{tld}"
+    base = rdap_map.get(tld)
+    if base:
+        status = rdap_check(base, domain)
+        if not status.startswith("unverified"):
+            return status, base
+    return whois_check(domain, tld)
+
+
 def main():
-    names_file, out_file = sys.argv[1], sys.argv[2]
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    opts = [a for a in sys.argv[1:] if a.startswith("--")]
+    if len(args) != 2:
+        print(__doc__)
+        sys.exit(1)
+    names_file, out_file = args
+    tlds = ["com", "ai"]
+    for o in opts:
+        if o.startswith("--tlds="):
+            tlds = [t.strip().lstrip(".").lower() for t in o.split("=", 1)[1].split(",") if t.strip()]
+
     with open(names_file, encoding="utf-8") as f:
         names = [ln.strip().lower() for ln in f if ln.strip() and not ln.startswith("#")]
 
@@ -110,8 +186,10 @@ def main():
     except FileNotFoundError:
         pass
 
-    ai_rdap = discover_ai_rdap()
-    print(f"AI RDAP endpoint: {ai_rdap or 'NONE (will use WHOIS)'}", flush=True)
+    rdap_map = load_rdap_map()
+    for tld in tlds:
+        ep = rdap_map.get(tld)
+        print(f".{tld} RDAP endpoint: {ep or 'NONE (will use WHOIS fallback)'}", flush=True)
 
     out = open(out_file, "a", encoding="utf-8")
     for name in names:
@@ -120,27 +198,16 @@ def main():
             continue
         seen.add(name)
         rec = {"candidate": name, "checked_at": datetime.now(timezone.utc).isoformat()}
-
-        # .com via Verisign RDAP
-        com_status = check_rdap(COM_RDAP + name + ".com")
-        rec["com"] = com_status
-        rec["com_source"] = "rdap.verisign.com"
-        time.sleep(0.15)
-
-        # .ai via RDAP, fallback WHOIS
-        if ai_rdap:
-            ai_status = check_rdap(ai_rdap + name + ".ai")
-            ai_source = ai_rdap
-            if ai_status.startswith("unverified"):
-                ai_status, ai_source = whois_ai(name + ".ai")
-        else:
-            ai_status, ai_source = whois_ai(name + ".ai")
-        rec["ai"] = ai_status
-        rec["ai_source"] = ai_source
-
+        line = f"{name:<16}"
+        for tld in tlds:
+            status, source = check(name, tld, rdap_map)
+            rec[tld] = status
+            rec[f"{tld}_source"] = source
+            line += f" .{tld}={status:<14}"
+            time.sleep(0.15)
         out.write(json.dumps(rec) + "\n")
         out.flush()
-        print(f"{name:<16} .com={com_status:<14} .ai={ai_status}", flush=True)
+        print(line, flush=True)
         time.sleep(0.2)
     out.close()
 

@@ -1,6 +1,6 @@
 # DomainGen
 
-A small, dependency-free Python script for **bulk domain availability checking** over `.com` and `.ai`, using authoritative registry data (RDAP) rather than scraping registrar websites or trusting search results.
+A small, dependency-free Python script for **bulk domain availability checking** over any TLD with a published RDAP service (`.com`, `.ai`, `.dev`, `.app`, `.io`, `.org`, …), using authoritative registry data rather than scraping registrar websites or trusting search results.
 
 Built for brand-naming sprints: feed it a list of candidate names, get back a JSON Lines ledger of verified availability you can filter, score, and iterate on.
 
@@ -10,8 +10,8 @@ Built for brand-naming sprints: feed it a list of candidate names, get back a JS
 
 RDAP is the registries' own machine-readable successor to WHOIS. Querying it means:
 
-- **`.com`** — checked directly against Verisign (the `.com` registry): `https://rdap.verisign.com/com/v1/domain/<name>.com`. HTTP `404` = unregistered, `200` = registered. No API key, no rate-limit games at sane volumes.
-- **`.ai`** — the endpoint is discovered at runtime from the [IANA RDAP bootstrap file](https://data.iana.org/rdap/dns.json), so the script keeps working if the `.ai` registry migrates providers. If RDAP is unreachable it falls back to plain WHOIS on `whois.nic.ai:43`.
+- **Every TLD's endpoint is discovered at runtime** from the [IANA RDAP bootstrap file](https://data.iana.org/rdap/dns.json) — `.com` resolves to Verisign, `.ai` to the .ai registry, `.dev` to Google Registry, and so on. The script keeps working if a registry migrates providers. HTTP `404` = unregistered, `200` = registered. No API key, no rate-limit games at sane volumes.
+- **WHOIS fallback** — if a TLD has no RDAP service or RDAP is unreachable, the script asks `whois.iana.org` for the TLD's WHOIS server, queries it on TCP/43, and matches conservative "not found" / "domain name:" patterns.
 - Anything ambiguous (timeouts, odd status codes, unparseable WHOIS) is recorded as **`unverified`** — the script never guesses.
 
 ## Usage
@@ -19,7 +19,8 @@ RDAP is the registries' own machine-readable successor to WHOIS. Querying it mea
 Requires Python 3.8+. No third-party packages.
 
 ```
-python check_domains.py names.txt results.jsonl
+python check_domains.py names.txt results.jsonl              # defaults to --tlds=com,ai
+python check_domains.py names.txt results.jsonl --tlds=com,ai,dev,io
 ```
 
 - `names.txt` — one bare candidate per line (no TLD). `#` comments allowed.

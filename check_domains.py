@@ -1,7 +1,12 @@
 """Bulk domain availability checker via RDAP (authoritative) with WHOIS fallback.
 
 Usage:
-    python check_domains.py names.txt results.jsonl [--tlds=com,ai]
+    python check_domains.py names.txt results.jsonl [--tlds=com,ai] [--no-whois-verify]
+
+Statuses: available (RDAP 404 confirmed by WHOIS "not found"), available(rdap-only)
+(RDAP 404 but WHOIS could not confirm — treat as unverified for high-stakes use),
+registered, restricted (registry-reserved: RDAP 404 but WHOIS reports usage
+restrictions, e.g. CIRA error 01044), unverified.
 
 names.txt: one candidate name per line (bare name, no TLD). '#' comments allowed.
 results.jsonl: append-mode JSON Lines, one record per candidate with per-TLD status.
@@ -45,6 +50,18 @@ WHOIS_AVAILABLE_PATTERNS = (
     "is free",
     "available for registration",
     "status: free",
+)
+# Registry-reserved/blocked names. Some registries (e.g. CIRA/.ca) serve RDAP 404
+# for these even though they cannot be registered — WHOIS is the only tell.
+WHOIS_RESTRICTED_PATTERNS = (
+    "usage restrictions",
+    "error code: 01044",
+    "reserved by the registry",
+    "registry reserved",
+    "not available for registration",
+    "prohibited",
+    "restricted",
+    "blocked",
 )
 WHOIS_REGISTERED_PATTERNS = (
     "domain name:",
@@ -117,19 +134,24 @@ def whois_server_for_tld(tld):
     return server
 
 
-def whois_check(domain, tld):
+def whois_check(domain, tld, retry=True):
     """Return (status, source) via the TLD's WHOIS server."""
     server = whois_server_for_tld(tld)
     if not server:
         return "unverified(no-whois-server)", "whois.iana.org"
     try:
         text = whois_query(server, domain).lower()
+        if any(p in text for p in WHOIS_RESTRICTED_PATTERNS):
+            return "restricted", server
         if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):
             return "available", server
         if any(p in text for p in WHOIS_REGISTERED_PATTERNS):
             return "registered", server
         return "unverified", server
     except Exception:
+        if retry:
+            time.sleep(10)  # ccTLD WHOIS servers (e.g. CIRA) rate-limit hard
+            return whois_check(domain, tld, retry=False)
         return "unverified", f"{server}(error)"
 
 
@@ -149,14 +171,29 @@ def rdap_check(base, domain):
     return f"unverified({st})"
 
 
-def check(name, tld, rdap_map):
-    """Return (status, source) for name.tld — RDAP first, WHOIS fallback."""
+def check(name, tld, rdap_map, whois_verify=True):
+    """Return (status, source) for name.tld — RDAP first, WHOIS fallback.
+
+    An RDAP 404 is necessary but NOT sufficient proof of registrability: some
+    registries (CIRA/.ca among them) serve 404 for registry-restricted names.
+    So RDAP "available" is cross-verified against WHOIS by default; only a
+    WHOIS "not found" upgrades it to a confirmed "available".
+    """
     domain = f"{name}.{tld}"
     base = rdap_map.get(tld)
     if base:
         status = rdap_check(base, domain)
-        if not status.startswith("unverified"):
+        if status == "registered":
             return status, base
+        if status == "available":
+            if not whois_verify:
+                return "available(rdap-only)", base
+            w_status, w_server = whois_check(domain, tld)
+            if w_status == "available":
+                return "available", f"{base} + {w_server}"
+            if w_status in ("restricted", "registered"):
+                return w_status, f"{base} + {w_server}"
+            return "available(rdap-only)", base
     return whois_check(domain, tld)
 
 
@@ -168,6 +205,7 @@ def main():
         sys.exit(1)
     names_file, out_file = args
     tlds = ["com", "ai"]
+    whois_verify = "--no-whois-verify" not in opts
     for o in opts:
         if o.startswith("--tlds="):
             tlds = [t.strip().lstrip(".").lower() for t in o.split("=", 1)[1].split(",") if t.strip()]
@@ -201,7 +239,7 @@ def main():
         rec = {"candidate": name, "checked_at": datetime.now(timezone.utc).isoformat()}
         line = f"{name:<16}"
         for tld in tlds:
-            status, source = check(name, tld, rdap_map)
+            status, source = check(name, tld, rdap_map, whois_verify)
             rec[tld] = status
             rec[f"{tld}_source"] = source
             line += f" .{tld}={status:<14}"

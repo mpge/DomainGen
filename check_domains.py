@@ -40,6 +40,16 @@ FALLBACK_RDAP = {
     "ca": "https://rdap.ca.fury.ca/rdap/domain/",
 }
 
+# Working RDAP services for TLDs absent from the IANA bootstrap (ccTLD listing
+# is opt-in). Verified 2026-07: registered controls return 200, gibberish 404.
+# Only applied when the bootstrap doesn't already carry the TLD.
+SUPPLEMENTAL_RDAP = {
+    "io": "https://rdap.identitydigital.services/rdap/domain/",
+    "sh": "https://rdap.identitydigital.services/rdap/domain/",
+    "me": "https://rdap.identitydigital.services/rdap/domain/",
+    "us": "https://rdap.nic.us/domain/",
+}
+
 WHOIS_AVAILABLE_PATTERNS = (
     "no object found",
     "not found",
@@ -58,23 +68,24 @@ WHOIS_VERIFY_TLDS = {"ca"}
 
 # Registry-reserved/blocked names. Some registries (e.g. CIRA/.ca) serve RDAP 404
 # for these even though they cannot be registered — WHOIS is the only tell.
+# Patterns are deliberately specific: bare words like "restricted" appear in the
+# legal boilerplate of ordinary WHOIS responses (.us, .co, ...) and must not match.
 WHOIS_RESTRICTED_PATTERNS = (
     "usage restrictions",
     "error code: 01044",
     "reserved by the registry",
     "registry reserved",
     "not available for registration",
-    "prohibited",
-    "restricted",
-    "blocked",
 )
+# NOTE: no bare "domain:" here — DENIC (.de) echoes "Domain: <name>" even for
+# free domains ("Status: free"). Registered evidence must be more specific.
 WHOIS_REGISTERED_PATTERNS = (
     "domain name:",
-    "domain:",
     "registrar:",
     "creation date",
     "created:",
     "registered on",
+    "status: connect",
 )
 
 
@@ -102,9 +113,11 @@ def load_rdap_map():
                 base += "/"
             for tld in tlds:
                 mapping[tld.lower()] = base + "domain/"
-        return mapping
     except Exception:
-        return dict(FALLBACK_RDAP)
+        mapping = dict(FALLBACK_RDAP)
+    for tld, url in SUPPLEMENTAL_RDAP.items():
+        mapping.setdefault(tld, url)
+    return mapping
 
 
 def whois_query(server, query, timeout=15):
@@ -145,13 +158,15 @@ def whois_check(domain, tld, retry=True):
     if not server:
         return "unverified(no-whois-server)", "whois.iana.org"
     try:
+        # Order matters: a registered record's boilerplate can contain words from
+        # the other pattern sets, so the most affirmative evidence wins first.
         text = whois_query(server, domain).lower()
-        if any(p in text for p in WHOIS_RESTRICTED_PATTERNS):
-            return "restricted", server
-        if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):
-            return "available", server
         if any(p in text for p in WHOIS_REGISTERED_PATTERNS):
             return "registered", server
+        if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):
+            return "available", server
+        if any(p in text for p in WHOIS_RESTRICTED_PATTERNS):
+            return "restricted", server
         return "unverified", server
     except Exception:
         if retry:

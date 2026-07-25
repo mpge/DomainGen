@@ -11,6 +11,7 @@ Built for brand-naming sprints: feed it a list of candidate names, get back a JS
 RDAP is the registries' own machine-readable successor to WHOIS. Querying it means:
 
 - **Every TLD's endpoint is discovered at runtime** from the [IANA RDAP bootstrap file](https://data.iana.org/rdap/dns.json) — `.com` resolves to Verisign, `.ai` to the .ai registry, `.dev` to Google Registry, and so on. The script keeps working if a registry migrates providers. HTTP `404` = unregistered, `200` = registered. No API key, no rate-limit games at sane volumes.
+- **Supplemental endpoints** for TLDs the bootstrap doesn't list (ccTLD participation is opt-in): `.io`, `.sh`, `.me` (Identity Digital) and `.us` are pinned in `SUPPLEMENTAL_RDAP`, verified against registered/gibberish controls.
 - **WHOIS fallback** — if a TLD has no RDAP service or RDAP is unreachable, the script asks `whois.iana.org` for the TLD's WHOIS server, queries it on TCP/43, and matches conservative "not found" / "domain name:" patterns.
 - **WHOIS cross-verification of "available"** — an RDAP 404 is *not* sufficient proof a name can be registered: some registries (CIRA/.ca, for example) serve 404 for registry-restricted names that are actually unregistrable (CIRA WHOIS error 01044 "usage restrictions"). By default every RDAP-available result is therefore double-checked against WHOIS: only a WHOIS "not found" yields a confirmed `available`; a restriction response yields `restricted`; an unreachable WHOIS yields `available(rdap-only)`. Skip the cross-check with `--no-whois-verify` if you want raw RDAP speed.
 - Anything ambiguous (timeouts, odd status codes, unparseable WHOIS) is recorded as **`unverified`** — the script never guesses.
@@ -47,9 +48,13 @@ python check_domains.py control.txt control_results.jsonl
 
 Expect `google` → registered on both TLDs and the gibberish → available on both. If not, a registry endpoint changed.
 
-## Extending to other TLDs
+## Tested TLDs
 
-Add the TLD's RDAP base URL (find it in the IANA bootstrap file) and mirror the `.com` block in `main()`. Most gTLDs (`.dev`, `.app`, `.xyz`, …) work identically; some ccTLDs have no RDAP and need a WHOIS fallback like the `.ai` one.
+`python test_tlds.py` validates any TLD list against control domains (a known-registered name must report `registered`, gibberish must report `available`). All 25 currently pass:
+
+`com net org ai ca io co dev app me xyz sh gg us uk de tv cc info biz shop store tech online site`
+
+`.co`, `.gg`, and `.de` have no public RDAP and are served by the WHOIS fallback. Any other TLD in the IANA bootstrap works without code changes — run `test_tlds.py your,tlds` first to confirm its registry behaves.
 
 ## Caveats
 

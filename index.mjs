@@ -52,6 +52,24 @@ const WHOIS_RESTRICTED = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Classify a raw WHOIS response: registered | available | restricted | unverified.
+ * Order matters: a registered record's boilerplate can contain words from the
+ * other pattern sets, so the most affirmative evidence wins first. Whitespace is
+ * collapsed because some registries pad status columns
+ * (.it/.be write "Status:             AVAILABLE").
+ */
+export function classifyWhois(text) {
+  const t = text.toLowerCase().split(/\s+/).join(" ");
+  if (WHOIS_REGISTERED.some((p) => t.includes(p))) return "registered";
+  if (WHOIS_AVAILABLE.some((p) => t.includes(p))) return "available";
+  if (WHOIS_RESTRICTED.some((p) => t.includes(p))) return "restricted";
+  return "unverified";
+}
+
+/** Network + timing seams, swappable in tests. */
+export const internals = { httpStatus, whoisQuery, sleep };
+
 async function httpStatus(url, timeoutMs = 15000) {
   try {
     const res = await fetch(url, {
@@ -106,7 +124,7 @@ async function whoisServerForTld(tld) {
   if (whoisServerCache.has(tld)) return whoisServerCache.get(tld);
   let server = null;
   try {
-    const text = await whoisQuery("whois.iana.org", tld);
+    const text = await internals.whoisQuery("whois.iana.org", tld);
     for (const line of text.split("\n")) {
       if (line.toLowerCase().startsWith("whois:")) {
         server = line.slice(line.indexOf(":") + 1).trim();
@@ -122,18 +140,11 @@ async function whoisCheck(domain, tld, retry = true) {
   const server = await whoisServerForTld(tld);
   if (!server) return { status: "unverified(no-whois-server)", source: "whois.iana.org" };
   try {
-    // Whitespace collapsed: some registries pad status columns
-    // (.it/.be write "Status:             AVAILABLE").
-    const text = (await whoisQuery(server, domain)).toLowerCase().split(/\s+/).join(" ");
-    // Order matters: a registered record's boilerplate can contain words from
-    // the other pattern sets, so the most affirmative evidence wins first.
-    if (WHOIS_REGISTERED.some((p) => text.includes(p))) return { status: "registered", source: server };
-    if (WHOIS_AVAILABLE.some((p) => text.includes(p))) return { status: "available", source: server };
-    if (WHOIS_RESTRICTED.some((p) => text.includes(p))) return { status: "restricted", source: server };
-    return { status: "unverified", source: server };
+    const status = classifyWhois(await internals.whoisQuery(server, domain));
+    return { status, source: server };
   } catch {
     if (retry) {
-      await sleep(10000); // ccTLD WHOIS servers (e.g. CIRA) rate-limit hard
+      await internals.sleep(10000); // ccTLD WHOIS servers (e.g. CIRA) rate-limit hard
       return whoisCheck(domain, tld, false);
     }
     return { status: "unverified", source: `${server}(error)` };
@@ -141,10 +152,10 @@ async function whoisCheck(domain, tld, retry = true) {
 }
 
 async function rdapCheck(base, domain) {
-  let st = await httpStatus(base + domain);
+  let st = await internals.httpStatus(base + domain);
   if (st === 429) {
-    await sleep(5000);
-    st = await httpStatus(base + domain);
+    await internals.sleep(5000);
+    st = await internals.httpStatus(base + domain);
   }
   if (st === 404) return "available";
   if (st === 200) return "registered";
@@ -195,11 +206,11 @@ export async function checkDomains(names, tlds, opts = {}) {
       const { status, source } = await check(name, tld, rdapMap, opts);
       rec[tld] = status;
       rec[`${tld}_source`] = source;
-      await sleep(150);
+      await internals.sleep(150);
     }
     records.push(rec);
     opts.onResult?.(rec);
-    await sleep(200);
+    await internals.sleep(200);
   }
   return records;
 }

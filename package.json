@@ -8,6 +8,9 @@
   "bin": {
     "domaingen": "bin/domaingen.mjs"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "files": [
     "index.mjs",
     "bin/",

@@ -73,6 +73,17 @@ Expect `google` → registered on both TLDs and the gibberish → available on b
 
 `.co`, `.gg`, `.de`, `.be`, `.it`, `.nz` and several others have no public RDAP and are served by the WHOIS fallback (per-registry response dialects are handled). Any other TLD in the IANA bootstrap works without code changes — run `test_tlds.py your,tlds` first to confirm its registry behaves.
 
+## Testing
+
+Both implementations have offline unit suites (all network mocked) covering the WHOIS dialect classifier, RDAP status mapping, the .ca cross-verification flow, bootstrap/supplemental endpoint resolution, and ledger dedup:
+
+```
+node --test              # Node suite (node:test, built-in)
+python -m unittest -v    # Python suite (unittest, stdlib)
+```
+
+CI runs both on every push and PR (`.github/workflows/test.yml`). `test_tlds.py` is the complementary *live* integration check against real registries.
+
 ## Agent skills
 
 The `skills/` directory ships ready-made integrations:

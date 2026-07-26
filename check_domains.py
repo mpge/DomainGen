@@ -161,24 +161,31 @@ def whois_server_for_tld(tld):
     return server
 
 
+def classify_whois(text):
+    """Classify a raw WHOIS response: registered | available | restricted | unverified.
+
+    Order matters: a registered record's boilerplate can contain words from the
+    other pattern sets, so the most affirmative evidence wins first. Whitespace
+    is collapsed because some registries pad status columns (.it/.be write
+    "Status:             AVAILABLE").
+    """
+    text = " ".join(text.lower().split())
+    if any(p in text for p in WHOIS_REGISTERED_PATTERNS):
+        return "registered"
+    if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):
+        return "available"
+    if any(p in text for p in WHOIS_RESTRICTED_PATTERNS):
+        return "restricted"
+    return "unverified"
+
+
 def whois_check(domain, tld, retry=True):
     """Return (status, source) via the TLD's WHOIS server."""
     server = whois_server_for_tld(tld)
     if not server:
         return "unverified(no-whois-server)", "whois.iana.org"
     try:
-        # Order matters: a registered record's boilerplate can contain words from
-        # the other pattern sets, so the most affirmative evidence wins first.
-        # Whitespace is collapsed because some registries pad status columns
-        # (.it/.be write "Status:             AVAILABLE").
-        text = " ".join(whois_query(server, domain).lower().split())
-        if any(p in text for p in WHOIS_REGISTERED_PATTERNS):
-            return "registered", server
-        if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):
-            return "available", server
-        if any(p in text for p in WHOIS_RESTRICTED_PATTERNS):
-            return "restricted", server
-        return "unverified", server
+        return classify_whois(whois_query(server, domain)), server
     except Exception:
         if retry:
             time.sleep(10)  # ccTLD WHOIS servers (e.g. CIRA) rate-limit hard

@@ -1,0 +1,42 @@
+{
+  "name": "domaingen",
+  "version": "1.0.0",
+  "description": "Bulk domain availability checking via authoritative registry RDAP (with WHOIS fallback and registry-restricted-name detection). Zero dependencies.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": "./index.mjs",
+  "bin": {
+    "domaingen": "bin/domaingen.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "bin/",
+    "check_domains.py",
+    "test_tlds.py",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "domain",
+    "availability",
+    "rdap",
+    "whois",
+    "domain-checker",
+    "naming",
+    "branding",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mpge/DomainGen.git"
+  },
+  "homepage": "https://github.com/mpge/DomainGen#readme",
+  "bugs": {
+    "url": "https://github.com/mpge/DomainGen/issues"
+  },
+  "author": "mpge (matthewpg.com)",
+  "license": "MIT"
+}

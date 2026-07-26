@@ -60,6 +60,12 @@ WHOIS_AVAILABLE_PATTERNS = (
     "is free",
     "available for registration",
     "status: free",
+    "status: available",       # .be, .eu, .it
+    "nothing found",           # .at
+    "we do not have an entry", # .ch (SWITCH)
+    "no information available",  # .pl WHOIS
+    "object_not_found",        # .mx
+    "query_status: 220",       # .nz (220 = available)
 )
 # TLDs whose RDAP serves 404 for registry-restricted names, making WHOIS
 # cross-verification of "available" results necessary. gTLD RDAP (Verisign,
@@ -81,11 +87,14 @@ WHOIS_RESTRICTED_PATTERNS = (
 # free domains ("Status: free"). Registered evidence must be more specific.
 WHOIS_REGISTERED_PATTERNS = (
     "domain name:",
+    "domain_name:",            # .nz
     "registrar:",
     "creation date",
     "created:",
     "registered on",
-    "status: connect",
+    "status: connect",         # .de (DENIC)
+    "holder of domain name",   # .ch (SWITCH)
+    "query_status: 200",       # .nz (200 = active)
 )
 
 
@@ -160,7 +169,9 @@ def whois_check(domain, tld, retry=True):
     try:
         # Order matters: a registered record's boilerplate can contain words from
         # the other pattern sets, so the most affirmative evidence wins first.
-        text = whois_query(server, domain).lower()
+        # Whitespace is collapsed because some registries pad status columns
+        # (.it/.be write "Status:             AVAILABLE").
+        text = " ".join(whois_query(server, domain).lower().split())
         if any(p in text for p in WHOIS_REGISTERED_PATTERNS):
             return "registered", server
         if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):

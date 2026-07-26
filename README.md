@@ -1,8 +1,22 @@
 # DomainGen
 
-A small, dependency-free Python script for **bulk domain availability checking** over any TLD with a published RDAP service (`.com`, `.ai`, `.dev`, `.app`, `.io`, `.org`, …), using authoritative registry data rather than scraping registrar websites or trusting search results.
+Dependency-free **bulk domain availability checking** over ~68 verified TLDs (`.com`, `.ai`, `.ca`, `.io`, `.dev`, `.uk`, `.de`, `.fr`, `.au`, `.shop`, …), using authoritative registry data (RDAP) rather than scraping registrar websites or trusting search results. Available as an **npm CLI/library** (Node 18+) and an identical **Python script** (3.8+).
 
 Built for brand-naming sprints: feed it a list of candidate names, get back a JSON Lines ledger of verified availability you can filter, score, and iterate on.
+
+## Quick start (npm)
+
+```
+npx domaingen "coveranew,inkanew" --tlds=com,ai     # inline check, no files
+npx domaingen names.txt results.jsonl --tlds=com,ca  # bulk ledger mode
+```
+
+Or as a library:
+
+```js
+import { loadRdapMap, check, checkDomains } from "domaingen";
+const records = await checkDomains(["coveranew", "inkanew"], ["com", "ai"]);
+```
 
 [Want to find a domain without running this?](https://namerobo.com)
 
@@ -16,9 +30,9 @@ RDAP is the registries' own machine-readable successor to WHOIS. Querying it mea
 - **WHOIS cross-verification of "available"** — an RDAP 404 is *not* sufficient proof a name can be registered: some registries (CIRA/.ca, for example) serve 404 for registry-restricted names that are actually unregistrable (CIRA WHOIS error 01044 "usage restrictions"). By default every RDAP-available result is therefore double-checked against WHOIS: only a WHOIS "not found" yields a confirmed `available`; a restriction response yields `restricted`; an unreachable WHOIS yields `available(rdap-only)`. Skip the cross-check with `--no-whois-verify` if you want raw RDAP speed.
 - Anything ambiguous (timeouts, odd status codes, unparseable WHOIS) is recorded as **`unverified`** — the script never guesses.
 
-## Usage
+## Usage (Python)
 
-Requires Python 3.8+. No third-party packages.
+Requires Python 3.8+. No third-party packages. Identical behavior and flags to the npm CLI.
 
 ```
 python check_domains.py names.txt results.jsonl              # defaults to --tlds=com,ai
@@ -50,11 +64,21 @@ Expect `google` → registered on both TLDs and the gibberish → available on b
 
 ## Tested TLDs
 
-`python test_tlds.py` validates any TLD list against control domains (a known-registered name must report `registered`, gibberish must report `available`). All 25 currently pass:
+`python test_tlds.py` validates any TLD list against control domains (a known-registered name — google.tld or the ICANN-mandated nic.tld — must report `registered`, gibberish must report `available`). All 68 currently pass:
 
-`com net org ai ca io co dev app me xyz sh gg us uk de tv cc info biz shop store tech online site`
+**gTLD:** `com net org info biz pro xyz one art fun space site online store shop tech cloud digital agency studio design club live world today news blog page network tools software email group media dev app`
+**ccTLD:** `ai ca io co me sh gg us uk de fr nl eu be at it pt se no dk fi pl cz ie au nz in br mx sg tv cc`
 
-`.co`, `.gg`, and `.de` have no public RDAP and are served by the WHOIS fallback. Any other TLD in the IANA bootstrap works without code changes — run `test_tlds.py your,tlds` first to confirm its registry behaves.
+**Unsupported:** `.ch` and `.es` — no public RDAP, and WHOIS is IP-allowlisted; the checker reports `unverified` for them rather than guessing.
+
+`.co`, `.gg`, `.de`, `.be`, `.it`, `.nz` and several others have no public RDAP and are served by the WHOIS fallback (per-registry response dialects are handled). Any other TLD in the IANA bootstrap works without code changes — run `test_tlds.py your,tlds` first to confirm its registry behaves.
+
+## Agent skills
+
+The `skills/` directory ships ready-made integrations:
+
+- **Claude Code**: copy `skills/claude/domaingen/` to `~/.claude/skills/domaingen/` — Claude then verifies availability with real registry data whenever domains come up.
+- **Codex CLI**: copy `skills/codex/domaingen.md` to `~/.codex/prompts/` — invoke with `/domaingen name1,name2`.
 
 ## Caveats
 

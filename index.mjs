@@ -26,6 +26,7 @@ export const SUPPLEMENTAL_RDAP = {
   sh: "https://rdap.identitydigital.services/rdap/domain/",
   me: "https://rdap.identitydigital.services/rdap/domain/",
   us: "https://rdap.nic.us/domain/",
+  so: "https://rdap.nic.so/domain/",
 };
 
 /** TLDs whose RDAP serves 404 for registry-restricted names (CIRA/.ca). */
@@ -36,6 +37,12 @@ export const WHOIS_VERIFY_TLDS = new Set(["ca"]);
 const WHOIS_REGISTERED = [
   "domain name:", "domain_name:", "registrar:", "creation date", "created:",
   "registered on", "status: connect", "holder of domain name", "query_status: 200",
+];
+// Unambiguous "does not exist" statements, checked BEFORE registered evidence:
+// .so echoes "Domain Name: <name>" on free domains, which would otherwise match
+// WHOIS_REGISTERED (same trap as DENIC's "Domain:" echo).
+const WHOIS_DEFINITIVE_AVAILABLE = [
+  "the queried object does not exist", // .so
 ];
 const WHOIS_AVAILABLE = [
   "no object found", "not found", "no match", "no entries found",
@@ -55,12 +62,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /**
  * Classify a raw WHOIS response: registered | available | restricted | unverified.
  * Order matters: a registered record's boilerplate can contain words from the
- * other pattern sets, so the most affirmative evidence wins first. Whitespace is
- * collapsed because some registries pad status columns
+ * other pattern sets, so the most affirmative evidence wins first — except an
+ * explicit "object does not exist", which beats a registry's echoed query.
+ * Whitespace is collapsed because some registries pad status columns
  * (.it/.be write "Status:             AVAILABLE").
  */
 export function classifyWhois(text) {
   const t = text.toLowerCase().split(/\s+/).join(" ");
+  if (WHOIS_DEFINITIVE_AVAILABLE.some((p) => t.includes(p))) return "available";
   if (WHOIS_REGISTERED.some((p) => t.includes(p))) return "registered";
   if (WHOIS_AVAILABLE.some((p) => t.includes(p))) return "available";
   if (WHOIS_RESTRICTED.some((p) => t.includes(p))) return "restricted";

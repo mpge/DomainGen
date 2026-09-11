@@ -36,6 +36,8 @@ test("classifyWhois: real-world registry dialects", () => {
     ["   Domain Name: GOOGLE.COM\n   Registrar: MarkMonitor Inc.", "registered"],
     ["Domain: xqzvkwplormtj.de\nStatus: free", "available"],          // DENIC echo trap
     ["Domain: google.de\nStatus: connect", "registered"],
+    ["Domain Name: xqzvkwplormtj.so\nThe queried object does not exist: No Object Found", "available"], // .so echo trap
+    ["Domain Name: google.so\nRegistrar: Mark Monitor", "registered"],
     ["Domain:             xqz.it\nStatus:             AVAILABLE", "available"], // padded columns
     ["domain_name: google.nz\nquery_status: 200 Active", "registered"],
     ["query_status: 220 Available", "available"],

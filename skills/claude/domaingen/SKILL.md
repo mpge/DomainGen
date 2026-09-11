@@ -27,7 +27,7 @@ If npx is unavailable, the Python twin behaves identically:
 python check_domains.py names.txt results.jsonl --tlds=com,ai
 ```
 
-`--tlds` accepts any of ~68 verified extensions (com, net, org, ai, ca, io, dev, app, uk, de, fr, au, shop, store, …). `.ch` and `.es` cannot be checked (no public registry access). For an untested TLD, validate it first: `python test_tlds.py <tld>` — a known-registered control must report `registered` and gibberish must report `available`.
+`--tlds` accepts any of ~69 verified extensions (com, net, org, ai, ca, io, co, so, dev, app, uk, de, fr, au, shop, store, …). `.ch` and `.es` cannot be checked (no public registry access). For an untested TLD, validate it first: `python test_tlds.py <tld>` — a known-registered control must report `registered` and gibberish must report `available`.
 
 ## Interpreting statuses
 

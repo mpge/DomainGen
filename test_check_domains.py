@@ -34,6 +34,16 @@ class ClassifyWhoisTests(unittest.TestCase):
         text = "Domain: xqzvkwplormtj.de\nStatus: free"
         self.assertEqual(cd.classify_whois(text), "available")
 
+    def test_so_free_domain_echo_is_not_registered(self):
+        # whois.nic.so echoes "Domain Name: <name>" even for free domains.
+        text = ("Domain Name: xqzvkwplormtj.so\n"
+                "The queried object does not exist: No Object Found")
+        self.assertEqual(cd.classify_whois(text), "available")
+
+    def test_so_registered(self):
+        text = "Domain Name: google.so\nRegistrar: Mark Monitor"
+        self.assertEqual(cd.classify_whois(text), "registered")
+
     def test_denic_registered(self):
         text = "Domain: google.de\nStatus: connect"
         self.assertEqual(cd.classify_whois(text), "registered")

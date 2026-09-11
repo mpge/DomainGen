@@ -20,4 +20,4 @@ Status semantics — report these faithfully:
 - `restricted`: RDAP shows no record but the registry blocks registration (CIRA 01044 and similar). Not purchasable — never call this available.
 - `available(rdap-only)` / `unverified`: unconfirmed — never present as available.
 
-~68 TLDs are verified working (com, net, org, ai, ca, io, dev, app, uk, de, fr, au, shop, …). `.ch`/`.es` cannot be checked remotely. Always tell the user to re-verify at a registrar checkout before purchase, and pair availability with a brand-conflict web search before recommending a name.
+~69 TLDs are verified working (com, net, org, ai, ca, io, co, so, dev, app, uk, de, fr, au, shop, …). `.ch`/`.es` cannot be checked remotely. Always tell the user to re-verify at a registrar checkout before purchase, and pair availability with a brand-conflict web search before recommending a name.

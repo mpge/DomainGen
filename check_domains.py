@@ -48,7 +48,15 @@ SUPPLEMENTAL_RDAP = {
     "sh": "https://rdap.identitydigital.services/rdap/domain/",
     "me": "https://rdap.identitydigital.services/rdap/domain/",
     "us": "https://rdap.nic.us/domain/",
+    "so": "https://rdap.nic.so/domain/",
 }
+
+# Unambiguous "does not exist" statements, checked BEFORE registered evidence:
+# .so echoes "Domain Name: <name>" on free domains, which would otherwise match
+# the registered patterns (same trap as DENIC's "Domain:" echo).
+WHOIS_DEFINITIVE_AVAILABLE_PATTERNS = (
+    "the queried object does not exist",  # .so
+)
 
 WHOIS_AVAILABLE_PATTERNS = (
     "no object found",
@@ -165,11 +173,14 @@ def classify_whois(text):
     """Classify a raw WHOIS response: registered | available | restricted | unverified.
 
     Order matters: a registered record's boilerplate can contain words from the
-    other pattern sets, so the most affirmative evidence wins first. Whitespace
-    is collapsed because some registries pad status columns (.it/.be write
-    "Status:             AVAILABLE").
+    other pattern sets, so the most affirmative evidence wins first — except an
+    explicit "object does not exist", which beats a registry's echoed query.
+    Whitespace is collapsed because some registries pad status columns (.it/.be
+    write "Status:             AVAILABLE").
     """
     text = " ".join(text.lower().split())
+    if any(p in text for p in WHOIS_DEFINITIVE_AVAILABLE_PATTERNS):
+        return "available"
     if any(p in text for p in WHOIS_REGISTERED_PATTERNS):
         return "registered"
     if any(p in text for p in WHOIS_AVAILABLE_PATTERNS):

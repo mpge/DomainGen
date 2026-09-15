@@ -5,8 +5,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  classifyWhois, check, checkDomains, loadRdapMap, internals,
-  FALLBACK_RDAP, SUPPLEMENTAL_RDAP,
+  classifyWhois, check, checkDomains, loadRdapMap, internals, settledCandidates,
+  FALLBACK_RDAP, SUPPLEMENTAL_RDAP, RDAP_429_BACKOFF_MS,
 } from "../index.mjs";
 
 const RDAP = { com: "https://rdap.example/com/", ca: "https://rdap.example/ca/" };
@@ -107,11 +107,43 @@ test("check: whoisVerify=false skips the .ca cross-check", async (t) => {
   assert.equal(r.status, "available(rdap-only)");
 });
 
-test("check: RDAP 429 retries once", async (t) => {
-  const codes = [429, 404];
+test("check: RDAP 429 retries until answered", async (t) => {
+  const codes = [429, 429, 404];
   withInternals(t, { httpStatus: async () => codes.shift() });
   const r = await check("name", "com", RDAP);
   assert.equal(r.status, "available");
+});
+
+test("check: .dev 429 that outlasts the backoff reports 429, not no-whois-server", async (t) => {
+  const rdap = { dev: "https://rdap.example/dev/" };
+  const sleeps = [];
+  let queries = 0;
+  withInternals(t, {
+    httpStatus: async () => { queries++; return 429; },
+    whoisQuery: async () => "", // IANA lists no WHOIS server for .dev
+    sleep: async (ms) => { sleeps.push(ms); },
+  });
+  const r = await check("name", "dev", rdap);
+  assert.deepEqual(r, { status: "unverified(429)", source: rdap.dev });
+  assert.equal(queries, RDAP_429_BACKOFF_MS.length + 1);
+  for (const ms of RDAP_429_BACKOFF_MS) assert.ok(sleeps.includes(ms), `missing ${ms}ms backoff`);
+});
+
+test("check: a 429 slows later queries to that registry host only", async (t) => {
+  const sleeps = [];
+  const codes = [429, 404, 404, 404];
+  withInternals(t, {
+    httpStatus: async () => codes.shift(),
+    sleep: async (ms) => { sleeps.push(ms); },
+  });
+  await check("a", "dev", { dev: "https://slow.example/" });
+  sleeps.length = 0;
+  await check("b", "dev", { dev: "https://slow.example/" });
+  assert.equal(sleeps.length, 1);
+  assert.ok(sleeps[0] > 0 && sleeps[0] <= 1500, `paced ${sleeps[0]}ms`);
+  sleeps.length = 0;
+  await check("c", "com", { com: "https://fast.example/" });
+  assert.deepEqual(sleeps, []);
 });
 
 test("check: RDAP failure falls back to WHOIS", async (t) => {
@@ -167,4 +199,17 @@ test("checkDomains: normalizes, skips comments/blanks, streams results", async (
   assert.deepEqual(streamed, ["alpha", "beta"]);
   assert.equal(records[0].com, "available");
   assert.ok(records[0].checked_at);
+});
+
+test("settledCandidates: unverified results are retried, last record wins", () => {
+  const lines = [
+    JSON.stringify({ candidate: "taken", dev: "registered" }),
+    JSON.stringify({ candidate: "throttled", dev: "unverified(429)" }),
+    JSON.stringify({ candidate: "recovered", dev: "unverified(429)" }),
+    JSON.stringify({ candidate: "recovered", dev: "available" }),
+    JSON.stringify({ candidate: "regressed", dev: "available" }),
+    JSON.stringify({ candidate: "regressed", dev: "unverified(ERR:TimeoutError)" }),
+    "not json", "",
+  ];
+  assert.deepEqual([...settledCandidates(lines, ["dev"])].sort(), ["recovered", "taken"]);
 });

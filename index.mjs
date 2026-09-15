@@ -160,11 +160,39 @@ async function whoisCheck(domain, tld, retry = true) {
   }
 }
 
+/**
+ * RDAP throttling. Registries rate-limit without a Retry-After header (Google
+ * Registry, which serves .dev/.app/.page, answers bare 429s), so a 429 backs off
+ * and also slows every later query to that registry host for the rest of the run.
+ */
+export const RDAP_429_BACKOFF_MS = [5000, 15000, 45000];
+// First slow-down: Google Registry took 30 queries at 1.5s spacing and
+// throttled after 11 at 0.7s (2026-09).
+const HOST_INTERVAL_MIN_MS = 1500;
+const HOST_INTERVAL_MAX_MS = 8000;
+const hostInterval = new Map(); // registry host -> minimum ms between queries
+const hostLast = new Map();     // registry host -> Date.now() of the last query
+
+async function pacedStatus(url) {
+  const host = new URL(url).host;
+  const interval = hostInterval.get(host) ?? 0;
+  if (interval) {
+    const wait = (hostLast.get(host) ?? 0) + interval - Date.now();
+    if (wait > 0) await internals.sleep(wait);
+  }
+  hostLast.set(host, Date.now());
+  return internals.httpStatus(url);
+}
+
 async function rdapCheck(base, domain) {
-  let st = await internals.httpStatus(base + domain);
-  if (st === 429) {
-    await internals.sleep(5000);
-    st = await internals.httpStatus(base + domain);
+  const url = base + domain;
+  let st = await pacedStatus(url);
+  for (const backoff of RDAP_429_BACKOFF_MS) {
+    if (st !== 429) break;
+    const host = new URL(url).host;
+    hostInterval.set(host, Math.min(Math.max(HOST_INTERVAL_MIN_MS, (hostInterval.get(host) ?? 0) * 2), HOST_INTERVAL_MAX_MS));
+    await internals.sleep(backoff);
+    st = await pacedStatus(url);
   }
   if (st === 404) return "available";
   if (st === 200) return "registered";
@@ -175,11 +203,15 @@ async function rdapCheck(base, domain) {
  * Check one name on one TLD. RDAP first, WHOIS fallback.
  * For TLDs in WHOIS_VERIFY_TLDS an RDAP 404 is cross-verified against WHOIS —
  * only a WHOIS "not found" upgrades it to a confirmed "available".
+ * If RDAP fails and WHOIS cannot settle the name either, the RDAP failure is
+ * reported: .dev has no WHOIS server, and "unverified(429)" says what went
+ * wrong where "unverified(no-whois-server)" would not.
  * @returns {Promise<{status: string, source: string}>}
  */
 export async function check(name, tld, rdapMap, { whoisVerify = true } = {}) {
   const domain = `${name}.${tld}`;
   const base = rdapMap[tld];
+  let rdapFailure = null;
   if (base) {
     const status = await rdapCheck(base, domain);
     if (status === "registered") return { status, source: base };
@@ -193,8 +225,32 @@ export async function check(name, tld, rdapMap, { whoisVerify = true } = {}) {
       }
       return { status: "available(rdap-only)", source: base };
     }
+    rdapFailure = status;
   }
-  return whoisCheck(domain, tld);
+  const w = await whoisCheck(domain, tld);
+  if (rdapFailure && w.status.startsWith("unverified")) return { status: rdapFailure, source: base };
+  return w;
+}
+
+/**
+ * Names in a ledger whose results for `tlds` are settled. Unverified results
+ * (rate limits, timeouts, no WHOIS server) are not settled: the next run retries
+ * them and appends a newer record, which supersedes the older one. When a
+ * candidate appears more than once, its last record decides.
+ * @param {string[]} lines JSON Lines ledger content
+ * @param {string[]} tlds
+ * @returns {Set<string>}
+ */
+export function settledCandidates(lines, tlds) {
+  const settled = new Set();
+  for (const line of lines) {
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (!rec?.candidate) continue;
+    if (tlds.some((t) => String(rec[t] ?? "").startsWith("unverified"))) settled.delete(rec.candidate);
+    else settled.add(rec.candidate);
+  }
+  return settled;
 }
 
 /**

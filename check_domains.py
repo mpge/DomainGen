@@ -26,8 +26,9 @@ import json
 import socket
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 UA = {"User-Agent": "domaingen-availability-checker/2.0 (+https://github.com/mpge/DomainGen)"}
@@ -204,19 +205,45 @@ def whois_check(domain, tld, retry=True):
         return "unverified", f"{server}(error)"
 
 
+# RDAP throttling. Registries rate-limit without a Retry-After header (Google
+# Registry, which serves .dev/.app/.page, answers bare 429s), so a 429 backs off
+# and also slows every later query to that registry host for the rest of the run.
+RDAP_429_BACKOFF = (5, 15, 45)  # seconds slept before each retry
+HOST_INTERVAL_MIN = 1.5         # first slow-down: Google Registry took 30 queries
+                                # at 1.5s spacing, throttled after 11 at 0.7s (2026-09)
+HOST_INTERVAL_MAX = 8.0         # ceiling for the per-host query interval
+
+_host_interval = {}  # registry host -> minimum seconds between queries
+_host_last = {}      # registry host -> time.monotonic() of the last query
+
+
+def paced_status(url):
+    """http_status(), spaced out per host once that host has throttled us."""
+    host = urllib.parse.urlsplit(url).netloc
+    interval = _host_interval.get(host, 0)
+    if interval:
+        wait = _host_last.get(host, 0) + interval - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+    _host_last[host] = time.monotonic()
+    return http_status(url)
+
+
 def rdap_check(base, domain):
-    st = http_status(base + domain)
+    url = base + domain
+    st = paced_status(url)
+    for backoff in RDAP_429_BACKOFF:
+        if st != 429:
+            break
+        host = urllib.parse.urlsplit(url).netloc
+        _host_interval[host] = min(max(HOST_INTERVAL_MIN, _host_interval.get(host, 0) * 2),
+                                   HOST_INTERVAL_MAX)
+        time.sleep(backoff)
+        st = paced_status(url)
     if st == 404:
         return "available"
     if st == 200:
         return "registered"
-    if st == 429:
-        time.sleep(5)
-        st = http_status(base + domain)
-        if st == 404:
-            return "available"
-        if st == 200:
-            return "registered"
     return f"unverified({st})"
 
 
@@ -227,9 +254,15 @@ def check(name, tld, rdap_map, whois_verify=True):
     proof of registrability (CIRA/.ca serves 404 for registry-restricted names),
     so RDAP "available" is cross-verified against WHOIS there; only a WHOIS
     "not found" upgrades it to a confirmed "available". Other TLDs trust RDAP.
+
+    If RDAP fails (say, a 429 that outlasts the backoff) and WHOIS cannot settle
+    the name either, the RDAP failure is what gets reported: .dev has no WHOIS
+    server, and "unverified(429)" says what went wrong where
+    "unverified(no-whois-server)" would not.
     """
     domain = f"{name}.{tld}"
     base = rdap_map.get(tld)
+    rdap_failure = None
     if base:
         status = rdap_check(base, domain)
         if status == "registered":
@@ -245,7 +278,32 @@ def check(name, tld, rdap_map, whois_verify=True):
             if w_status in ("restricted", "registered"):
                 return w_status, f"{base} + {w_server}"
             return "available(rdap-only)", base
-    return whois_check(domain, tld)
+        rdap_failure = status
+    w_status, w_source = whois_check(domain, tld)
+    if rdap_failure and w_status.startswith("unverified"):
+        return rdap_failure, base
+    return w_status, w_source
+
+
+def settled_candidates(lines, tlds):
+    """Names in a ledger whose results for `tlds` are settled.
+
+    Unverified results (rate limits, timeouts, no WHOIS server) are not settled:
+    the next run retries them and appends a newer record, which supersedes the
+    older one. When a candidate appears more than once, its last record decides.
+    """
+    settled = set()
+    for ln in lines:
+        try:
+            rec = json.loads(ln)
+            name = rec["candidate"]
+        except Exception:
+            continue
+        if any(str(rec.get(t, "")).startswith("unverified") for t in tlds):
+            settled.discard(name)
+        else:
+            settled.add(name)
+    return settled
 
 
 def main():
@@ -264,17 +322,12 @@ def main():
     with open(names_file, encoding="utf-8") as f:
         names = [ln.strip().lower() for ln in f if ln.strip() and not ln.startswith("#")]
 
-    # de-dup against already-checked names in the output file
-    seen = set()
+    # de-dup against names the output file already settled
     try:
         with open(out_file, encoding="utf-8") as f:
-            for ln in f:
-                try:
-                    seen.add(json.loads(ln)["candidate"])
-                except Exception:
-                    pass
+            seen = settled_candidates(f, tlds)
     except FileNotFoundError:
-        pass
+        seen = set()
 
     rdap_map = load_rdap_map()
     for tld in tlds:

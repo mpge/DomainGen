@@ -28,6 +28,7 @@ RDAP is the registries' own machine-readable successor to WHOIS. Querying it mea
 - **Supplemental endpoints** for TLDs the bootstrap doesn't list (ccTLD participation is opt-in): `.io`, `.sh`, `.me` (Identity Digital), `.us` and `.so` are pinned in `SUPPLEMENTAL_RDAP`, verified against registered/gibberish controls.
 - **WHOIS fallback** — if a TLD has no RDAP service or RDAP is unreachable, the script asks `whois.iana.org` for the TLD's WHOIS server, queries it on TCP/43, and matches conservative "not found" / "domain name:" patterns.
 - **WHOIS cross-verification of "available"** — an RDAP 404 is *not* sufficient proof a name can be registered: some registries (CIRA/.ca, for example) serve 404 for registry-restricted names that are actually unregistrable (CIRA WHOIS error 01044 "usage restrictions"). By default every RDAP-available result is therefore double-checked against WHOIS: only a WHOIS "not found" yields a confirmed `available`; a restriction response yields `restricted`; an unreachable WHOIS yields `available(rdap-only)`. Skip the cross-check with `--no-whois-verify` if you want raw RDAP speed.
+- **Rate limits** — registries throttle RDAP without saying how hard. Google Registry (`.dev`, `.app`, `.page`) answers bare `429`s, no `Retry-After`, once queries arrive faster than roughly one a second. A 429 backs off (5s, 15s, 45s) and slows every later query to that registry host for the rest of the run (1.5s spacing, doubling on each further 429, capped at 8s). A name still throttled after the backoff is recorded as `unverified(429)`; since `.dev` has no WHOIS server to fall back on, the RDAP error is kept rather than replaced by `unverified(no-whois-server)`.
 - Anything ambiguous (timeouts, odd status codes, unparseable WHOIS) is recorded as **`unverified`** — the script never guesses.
 
 ## Usage (Python)
@@ -49,7 +50,7 @@ python check_domains.py names.txt results.jsonl --tlds=ca    # ccTLDs work too (
  "ai": "registered", "ai_source": "https://rdap.identitydigital.services/rdap/domain/"}
 ```
 
-Candidates already present in the output file are skipped, so you can run many iterations against one ledger and it doubles as your dedup list.
+Candidates already settled in the output file are skipped, so you can run many iterations against one ledger and it doubles as your dedup list. `unverified` results are not settled: the next run retries them and appends a newer record, and a candidate's last record is the one that counts.
 
 ### Sanity-check a run
 
@@ -75,7 +76,7 @@ Expect `google` → registered on both TLDs and the gibberish → available on b
 
 ## Testing
 
-Both implementations have offline unit suites (all network mocked) covering the WHOIS dialect classifier, RDAP status mapping, the .ca cross-verification flow, bootstrap/supplemental endpoint resolution, and ledger dedup:
+Both implementations have offline unit suites (all network mocked) covering the WHOIS dialect classifier, RDAP status mapping, 429 backoff and per-host pacing, the .ca cross-verification flow, bootstrap/supplemental endpoint resolution, and ledger dedup (including retries of unverified rows):
 
 ```
 node --test              # Node suite (node:test, built-in)

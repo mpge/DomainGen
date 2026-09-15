@@ -80,6 +80,10 @@ class ClassifyWhoisTests(unittest.TestCase):
 
 
 class RdapCheckTests(unittest.TestCase):
+    def setUp(self):
+        cd._host_interval.clear()
+        cd._host_last.clear()
+
     def test_404_is_available(self):
         with mock.patch.object(cd, "http_status", return_value=404):
             self.assertEqual(cd.rdap_check("https://r/", "x.com"), "available")
@@ -88,10 +92,33 @@ class RdapCheckTests(unittest.TestCase):
         with mock.patch.object(cd, "http_status", return_value=200):
             self.assertEqual(cd.rdap_check("https://r/", "x.com"), "registered")
 
-    def test_429_retries_once(self):
-        with mock.patch.object(cd, "http_status", side_effect=[429, 404]), \
+    def test_429_retries_until_answered(self):
+        with mock.patch.object(cd, "http_status", side_effect=[429, 429, 404]), \
              mock.patch.object(cd.time, "sleep"):
             self.assertEqual(cd.rdap_check("https://r/", "x.com"), "available")
+
+    def test_429_that_outlasts_backoff_is_unverified(self):
+        with mock.patch.object(cd, "http_status", return_value=429) as hs, \
+             mock.patch.object(cd.time, "sleep") as sleep:
+            self.assertEqual(cd.rdap_check("https://r/", "x.dev"), "unverified(429)")
+        self.assertEqual(hs.call_count, len(cd.RDAP_429_BACKOFF) + 1)
+        for backoff in cd.RDAP_429_BACKOFF:
+            sleep.assert_any_call(backoff)
+
+    def test_429_slows_later_queries_to_that_host_only(self):
+        with mock.patch.object(cd, "http_status", side_effect=[429, 404, 404, 404]), \
+             mock.patch.object(cd.time, "sleep") as sleep:
+            cd.rdap_check("https://slow.example/", "a.dev")
+            sleep.reset_mock()
+            cd.rdap_check("https://slow.example/", "b.dev")
+            paced = [c.args[0] for c in sleep.call_args_list]
+            sleep.reset_mock()
+            cd.rdap_check("https://fast.example/", "c.com")
+            unpaced = sleep.call_args_list
+        self.assertEqual(cd._host_interval["slow.example"], cd.HOST_INTERVAL_MIN)
+        self.assertEqual(len(paced), 1)
+        self.assertTrue(0 < paced[0] <= cd.HOST_INTERVAL_MIN)
+        self.assertEqual(unpaced, [])
 
     def test_error_is_unverified(self):
         with mock.patch.object(cd, "http_status", return_value="ERR:Timeout"):
@@ -148,6 +175,17 @@ class CheckFlowTests(unittest.TestCase):
             status, source = cd.check("name", "com", self.RDAP)
         self.assertEqual(status, "available")
         self.assertEqual(source, "whois.x")
+
+    def test_rdap_failure_reported_when_whois_cannot_settle(self):
+        # .dev has no WHOIS server: a throttled RDAP query must say 429, not
+        # "no-whois-server".
+        rdap = {"dev": "https://pubapi.registry.google/rdap/domain/"}
+        with mock.patch.object(cd, "rdap_check", return_value="unverified(429)"), \
+             mock.patch.object(cd, "whois_check",
+                               return_value=("unverified(no-whois-server)", "whois.iana.org")):
+            status, source = cd.check("name", "dev", rdap)
+        self.assertEqual(status, "unverified(429)")
+        self.assertEqual(source, rdap["dev"])
 
     def test_unknown_tld_uses_whois(self):
         with mock.patch.object(cd, "whois_check", return_value=("registered", "whois.y")):
@@ -214,6 +252,39 @@ class MainLedgerTests(unittest.TestCase):
             self.assertEqual(rec["com"], "available")
             self.assertEqual(rec["ai"], "available")
             self.assertIn("checked_at", rec)
+
+    def test_settled_candidates_retries_unverified_and_last_record_wins(self):
+        lines = [
+            json.dumps({"candidate": "taken", "dev": "registered"}),
+            json.dumps({"candidate": "throttled", "dev": "unverified(429)"}),
+            json.dumps({"candidate": "recovered", "dev": "unverified(429)"}),
+            json.dumps({"candidate": "recovered", "dev": "available"}),
+            json.dumps({"candidate": "regressed", "dev": "available"}),
+            json.dumps({"candidate": "regressed", "dev": "unverified(ERR:timeout)"}),
+            "not json",
+        ]
+        self.assertEqual(cd.settled_candidates(lines, ["dev"]), {"taken", "recovered"})
+
+    def test_unverified_ledger_rows_are_rechecked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            names = os.path.join(tmp, "names.txt")
+            out = os.path.join(tmp, "out.jsonl")
+            with open(names, "w") as f:
+                f.write("done\nretry\n")
+            with open(out, "w") as f:
+                f.write(json.dumps({"candidate": "done", "dev": "registered"}) + "\n")
+                f.write(json.dumps({"candidate": "retry", "dev": "unverified(429)"}) + "\n")
+            with mock.patch.object(cd, "load_rdap_map", return_value={}), \
+                 mock.patch.object(cd, "check", return_value=("available", "src")) as chk, \
+                 mock.patch.object(cd.time, "sleep"), \
+                 mock.patch.object(sys, "argv", ["check_domains.py", names, out, "--tlds=dev"]), \
+                 mock.patch("sys.stdout", new_callable=io.StringIO):
+                cd.main()
+            with open(out) as f:
+                rows = [json.loads(l) for l in f]
+        self.assertEqual([c.args[0] for c in chk.call_args_list], ["retry"])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual((rows[-1]["candidate"], rows[-1]["dev"]), ("retry", "available"))
 
 
 if __name__ == "__main__":

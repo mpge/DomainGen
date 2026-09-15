@@ -14,7 +14,7 @@
  *           "unverified" as available.
  */
 import fs from "node:fs";
-import { loadRdapMap, check, checkDomains } from "../index.mjs";
+import { loadRdapMap, check, checkDomains, settledCandidates } from "../index.mjs";
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const opts = process.argv.slice(2).filter((a) => a.startsWith("--"));
@@ -59,12 +59,9 @@ if (args.length === 1 && !fs.existsSync(args[0])) {
   if (!fs.existsSync(namesFile)) usage();
   const names = fs.readFileSync(namesFile, "utf8").split("\n");
 
-  const seen = new Set();
-  if (fs.existsSync(outFile)) {
-    for (const line of fs.readFileSync(outFile, "utf8").split("\n")) {
-      try { seen.add(JSON.parse(line).candidate); } catch { /* skip */ }
-    }
-  }
+  const seen = fs.existsSync(outFile)
+    ? settledCandidates(fs.readFileSync(outFile, "utf8").split("\n"), tlds)
+    : new Set();
   const fresh = names.filter((n) => {
     const name = n.trim().toLowerCase();
     return name && !name.startsWith("#") && !seen.has(name);

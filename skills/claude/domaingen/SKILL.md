@@ -15,7 +15,7 @@ Quick check (one or more names, comma-separated, no TLD suffix):
 npx domaingen "coveranew,inkanew" --tlds=com,ai
 ```
 
-Bulk sprint with a persistent ledger (skips already-checked names on re-run):
+Bulk sprint with a persistent ledger (skips already-settled names on re-run; `unverified` rows are retried and the newest record for a name wins):
 
 ```
 npx domaingen names.txt results.jsonl --tlds=com,ai
@@ -35,10 +35,10 @@ python check_domains.py names.txt results.jsonl --tlds=com,ai
 - `registered` — taken.
 - `restricted` — looks free in RDAP but the registry blocks registration (e.g. CIRA error 01044). NOT purchasable; never present as available.
 - `available(rdap-only)` — RDAP says free but WHOIS could not confirm. Present as "likely available, unconfirmed".
-- `unverified` — no reliable answer. Never present as available.
+- `unverified` — no reliable answer. Never present as available. `unverified(429)` means the registry kept throttling past the backoff (Google Registry's `.dev`/`.app`/`.page` RDAP does this above roughly one query a second); re-run the same ledger later and those rows are retried.
 
 ## Rules
 
-1. Availability is a point-in-time snapshot — tell the user to re-verify at a registrar immediately before purchase; registrar checkout is the final word (premium pricing and reservations exist beyond registry data).
+1. Availability is a point-in-time snapshot — tell the user to re-verify at a registrar immediately before purchase; registrar checkout is the final word (premium pricing and reservations exist beyond registry data; short `.dev`/`.app` names are often registry-premium).
 2. In naming sprints, pair availability checks with a web search for brand conflicts before recommending a name — an available domain with an active same-name competitor is not a win.
-3. Be polite to registries: the tool's built-in delays stay; don't parallelize hard against one registry. ccTLD WHOIS (CIRA especially) rate-limits aggressively.
+3. Be polite to registries: the tool's built-in delays and 429 pacing stay; run at most one checker process per registry (one for Verisign `.com`/`.net`, one for Google `.dev`/`.app`, ...). ccTLD WHOIS (CIRA especially) rate-limits aggressively.

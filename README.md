@@ -102,3 +102,7 @@ The `skills/` directory ships ready-made integrations:
 ## License
 
 MIT
+
+## Support
+
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/mpge)
